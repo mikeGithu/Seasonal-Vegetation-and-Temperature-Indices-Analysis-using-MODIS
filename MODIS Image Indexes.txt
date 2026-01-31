@@ -1,0 +1,204 @@
+// AUTOMATICALLY GENERATED: imported vars from saved link.
+var CONVERT_TO_IMPORT = (
+[{"type":"table","name":"roi","record":{"id":"projects/ee-michaelgetu22/assets/Polygon"}}])
+
+// AUTOMATICALLY GENERATED: location from saved link.
+Map.setCenter(264.8, 34.8, 4)
+
+//----------------------------------------
+// REGION OF INTEREST
+Map.centerObject(roi);
+// Map.addLayer(roi)
+// YEAR
+//----------------------------------------
+var year = 2024;
+var start = ee.Date.fromYMD(year,1,1);
+var end   = ee.Date.fromYMD(year,12,31);
+
+//----------------------------------------
+// LOAD NDVI (MOD13A2)
+// Scale factor = 0.0001
+//----------------------------------------
+var ndvi = ee.ImageCollection("MODIS/061/MOD13A2")
+  .select('NDVI')
+  .filterDate(start, end);
+  
+// print(ndvi)
+
+// //----------------------------------------
+// // LOAD LST (MOD11A2)
+// // Scale factor = 0.02
+// //----------------------------------------
+var temp = ee.ImageCollection("MODIS/061/MOD11A2")
+  .select('LST_Day_1km')
+  .filterDate(start, end);
+// print(temp)
+// //----------------------------------------
+// // NDVI MIN/MAX for VCI (year 2024 only)
+// //----------------------------------------
+var ndvi_min = ndvi.min().multiply(0.0001);
+var ndvi_max = ndvi.max().multiply(0.0001);
+
+// print(ndvi_min)
+
+//----------------------------------------
+// Create monthly collections
+//----------------------------------------
+function monthlyCollection(col){
+  return ee.ImageCollection(
+    ee.List.sequence(1,12).map(function(m){
+      var s = ee.Date.fromYMD(year, m, 1);
+      var e = s.advance(1,'month');
+      return col.filterDate(s, e).mean()
+        .set('month', m)
+        .set('system:time_start', s.millis());
+    })
+  );
+}
+
+var ndvi_monthly = monthlyCollection(ndvi);
+var temp_monthly = monthlyCollection(temp);
+
+//----------------------------------------
+// SELECT WET SEASON MONTHS
+//----------------------------------------
+var MAM_months  = ee.List([3,4,5]);
+var ASON_months = ee.List([8,9,10,11]);
+
+var ndvi_MAM  = ndvi_monthly.filter(ee.Filter.inList('month', MAM_months));
+var ndvi_ASON = ndvi_monthly.filter(ee.Filter.inList('month', ASON_months));
+
+var temp_MAM  = temp_monthly.filter(ee.Filter.inList('month', MAM_months));
+var temp_ASON = temp_monthly.filter(ee.Filter.inList('month', ASON_months));
+
+//----------------------------------------
+// VCI (0–100)
+//----------------------------------------
+function computeVCI(img){
+  var vci = img.expression(
+    '100 * ((ndvi - min) / (max - min))', {
+      'ndvi': img.select('NDVI').multiply(0.0001),
+      'min': ndvi_min,
+      'max': ndvi_max
+  }).rename('VCI');
+
+  vci = vci.where(vci.lt(0), 0).where(vci.gt(100), 100);
+  return img.addBands(vci);
+}
+
+var vci_MAM  = ndvi_MAM.map(computeVCI);
+var vci_ASON = ndvi_ASON.map(computeVCI);
+
+//----------------------------------------
+// TCI (0–100)
+//----------------------------------------
+var temp_max_C = temp.max().multiply(0.02).subtract(273.15);
+var temp_min_C = temp.min().multiply(0.02).subtract(273.15);
+
+function computeTCI(img){
+  var tci = img.expression(
+    '100 * ((max - lst) / (max - min))', {
+      'max': temp_max_C,
+      'min': temp_min_C,
+      'lst': img.multiply(0.02).subtract(273.15)
+  }).rename('TCI');
+
+  tci = tci.where(tci.lt(0), 0).where(tci.gt(100), 100);
+  return img.addBands(tci);
+}
+
+var tci_MAM  = temp_MAM.map(computeTCI);
+var tci_ASON = temp_ASON.map(computeTCI);
+
+//----------------------------------------
+// VHI (0–100) = 0.5*VCI + 0.5*TCI
+//----------------------------------------
+function computeVHI(vciCol, tciCol){
+  return vciCol.combine(tciCol).map(function(img){
+    var vhi = img.expression(
+      '0.5*VCI + 0.5*TCI', {
+        'VCI': img.select('VCI'),
+        'TCI': img.select('TCI')
+      }).rename('VHI');
+    return img.addBands(vhi);
+  });
+}
+
+var vhi_MAM  = computeVHI(vci_MAM,  tci_MAM);
+var vhi_ASON = computeVHI(vci_ASON, tci_ASON);
+
+//----------------------------------------
+// SEASONAL MEANS
+//----------------------------------------
+var NDVI_MAM_mean = ndvi_MAM.mean().multiply(0.0001).clip(roi);
+var NDVI_ASON_mean = ndvi_ASON.mean().multiply(0.0001).clip(roi);
+
+var LST_MAM_mean = temp_MAM.mean().multiply(0.02).subtract(273.15).clip(roi);
+var LST_ASON_mean = temp_ASON.mean().multiply(0.02).subtract(273.15).clip(roi);
+
+var VCI_MAM_mean = vci_MAM.mean().clip(roi);
+var VCI_ASON_mean = vci_ASON.mean().clip(roi);
+
+var TCI_MAM_mean = tci_MAM.mean().clip(roi);
+var TCI_ASON_mean = tci_ASON.mean().clip(roi);
+
+var VHI_MAM_mean = vhi_MAM.mean().clip(roi);
+var VHI_ASON_mean = vhi_ASON.mean().clip(roi);
+
+//----------------------------------------
+// Visualization Parameters
+//----------------------------------------
+var ndviparams = {min:-0.2, max:0.8, palette:['blue','yellow','green']};
+var LSTparams  = {min:10, max:45, palette:['blue','yellow','red']}; // °C
+var VCIparams  = {min:0, max:100, palette:['red','yellow','green']};
+var TCIparams  = {min:0, max:100, palette:['red','yellow','green']};
+var VHIparams  = {min:0, max:100, palette:['red','yellow','green']};
+
+//----------------------------------------
+// ADD LAYERS
+//----------------------------------------
+Map.addLayer(NDVI_MAM_mean, ndviparams, 'NDVI MAM');
+Map.addLayer(NDVI_ASON_mean, ndviparams, 'NDVI ASON');
+
+Map.addLayer(LST_MAM_mean, LSTparams, 'LST MAM (°C)');
+Map.addLayer(LST_ASON_mean, LSTparams, 'LST ASON (°C)');
+
+Map.addLayer(VCI_MAM_mean.select('VCI'), VCIparams, 'VCI MAM');
+Map.addLayer(VCI_ASON_mean.select('VCI'), VCIparams, 'VCI ASON');
+
+Map.addLayer(TCI_MAM_mean.select('TCI'), TCIparams, 'TCI MAM');
+Map.addLayer(TCI_ASON_mean.select('TCI'), TCIparams, 'TCI ASON');
+
+Map.addLayer(VHI_MAM_mean.select('VHI'), VHIparams, 'VHI MAM');
+Map.addLayer(VHI_ASON_mean.select('VHI'), VHIparams, 'VHI ASON');
+
+//----------------------------------------
+// EXPORT FUNCTION
+//----------------------------------------
+function exportIndex(image, desc){
+  Export.image.toDrive({
+    image: image,
+    description: desc,
+    region: roi,
+    scale: 1000,
+    crs: 'EPSG:4326',
+    maxPixels: 1e13
+  });
+}
+
+//----------------------------------------
+// EXPORT INDICES SEPARATELY
+//----------------------------------------
+// MAM
+exportIndex(NDVI_MAM_mean, 'NDVI_MAM_2024');
+exportIndex(LST_MAM_mean, 'LST_MAM_2024');
+exportIndex(VCI_MAM_mean.select('VCI'), 'VCI_MAM_2024');
+exportIndex(TCI_MAM_mean.select('TCI'), 'TCI_MAM_2024');
+exportIndex(VHI_MAM_mean.select('VHI'), 'VHI_MAM_2024');
+
+// ASON
+exportIndex(NDVI_ASON_mean, 'NDVI_ASON_2024');
+exportIndex(LST_ASON_mean, 'LST_ASON_2024');
+exportIndex(VCI_ASON_mean.select('VCI'), 'VCI_ASON_2024');
+exportIndex(TCI_ASON_mean.select('TCI'), 'TCI_ASON_2024');
+exportIndex(VHI_ASON_mean.select('VHI'), 'VHI_ASON_2024');
